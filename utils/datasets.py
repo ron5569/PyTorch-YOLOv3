@@ -11,7 +11,7 @@ from utils.augmentations import horisontal_flip
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 
-
+STDDEV = 0.12
 def pad_to_square(img, pad_value):
     c, h, w = img.shape
     dim_diff = np.abs(h - w)
@@ -43,8 +43,16 @@ class ImageFolder(Dataset):
 
     def __getitem__(self, index):
         img_path = self.files[index % len(self.files)]
+        print("img_path", img_path)
         # Extract image as PyTorch tensor
-        img = transforms.ToTensor()(Image.open(img_path))
+        #img = transforms.ToTensor()(Image.open(img_path))
+        img = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.3139, 0.3139, 0.3139), (0.1943, 0.1943, 0.1943))])(Image.open(img_path).convert('RGB'))
+### mean tensor([0.2757, 0.2757, 0.2757]), std tensor([0.1896, 0.1896, 0.1896])
+        #noise = torch.randn(img.size()) * STDDEV
+        #img = img + noise
+
         # Pad to square resolution
         img, _ = pad_to_square(img, 0)
         # Resize
@@ -62,7 +70,7 @@ class ListDataset(Dataset):
             self.img_files = file.readlines()
 
         self.label_files = [
-            path.replace("images", "labels").replace(".png", ".txt").replace(".jpg", ".txt")
+            path.replace("images", "labels").replace(".png", ".txt").replace(".jpg", ".txt").replace(".jpeg", ".txt")
             for path in self.img_files
         ]
         self.img_size = img_size
@@ -81,10 +89,12 @@ class ListDataset(Dataset):
         # ---------
 
         img_path = self.img_files[index % len(self.img_files)].rstrip()
-
         # Extract image as PyTorch tensor
-        img = transforms.ToTensor()(Image.open(img_path).convert('RGB'))
+#        img = transforms.ToTensor()(Image.open(img_path).convert('RGB'))
 
+        img = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4965, 0.4965, 0.4965), (0.0306, 0.0306, 0.0306))])(Image.open(img_path).convert('RGB'))
         # Handle images with less than three channels
         if len(img.shape) != 3:
             img = img.unsqueeze(0)
@@ -123,22 +133,32 @@ class ListDataset(Dataset):
 
             targets = torch.zeros((len(boxes), 6))
             targets[:, 1:] = boxes
-
+        else:
+            raise(f"label path not found: {label_path}")
         # Apply augmentations
         if self.augment:
             if np.random.random() < 0.5:
-                img, targets = horisontal_flip(img, targets)
+                try:
+                    img, targets = horisontal_flip(img, targets)
+                except Exception as e:
+                    print("ron", label_path)
+                    exit(3)
+                    
 
         return img_path, img, targets
 
     def collate_fn(self, batch):
         paths, imgs, targets = list(zip(*batch))
-        # Remove empty placeholder targets
-        targets = [boxes for boxes in targets if boxes is not None]
         # Add sample index to targets
         for i, boxes in enumerate(targets):
-            boxes[:, 0] = i
-        targets = torch.cat(targets, 0)
+            if boxes is not None:
+                boxes[:, 0] = i
+        # Remove empty placeholder targets
+        targets = [boxes for boxes in targets if boxes is not None]
+        if targets != []:
+            targets = torch.cat(targets, 0)
+        else:
+            targets = torch.zeros(1, 6)
         # Selects new image size every tenth batch
         if self.multiscale and self.batch_count % 10 == 0:
             self.img_size = random.choice(range(self.min_size, self.max_size + 1, 32))

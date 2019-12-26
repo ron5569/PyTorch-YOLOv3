@@ -56,13 +56,45 @@ def print_to_tensorboard(patth, prefix):
     print(f"---- mAP {AP.mean()}")
 
 
+
+def do_transfer():
+
+    def get_yolo_layers(model):
+        return [i for i, x in enumerate(model.module_defs) if x['type'] == 'yolo']  # [82, 94, 106] for yolov3
+    yolo_layers = get_yolo_layers(model)
+    nf = int(model.module_defs[yolo_layers[0] - 1]['filters'])  # yolo layer size (i.e. 255)
+    for p in model.parameters():
+        if p.numel() == nf or p.shape[0] == nf:  # train (yolo biases)
+            p.requires_grad = True
+        else:  # freeze layer
+            p.requires_grad = False
+
+
+def load_model_custom(weights):
+    # load model
+    try:
+        chkpt = torch.load(weights, map_location=device)
+        state_dict = model.state_dict()
+        # for k,v in chkpt.items():
+        #     if state_dict[k].numel() == v.numel():
+        #         print("what so ever!")
+        #     else:
+        #         print(k,v )
+        chkpt2 = {k: v for k, v in chkpt.items() if state_dict[k].numel() == v.numel()}
+        model.load_state_dict(chkpt2, strict=False)
+    except KeyError as e:
+        s = "%s is not compatible with %s. Specify --weights '' or specify a --cfg compatible with %s. " \
+            "See https://github.com/ultralytics/yolov3/issues/657" % (opt.weights, opt.cfg, opt.weights)
+        raise KeyError(s) from e
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=100, help="number of epochs")
     parser.add_argument("--batch_size", type=int, default=8, help="size of each image batch")
     parser.add_argument("--gradient_accumulations", type=int, default=2, help="number of gradient accums before step")
-    parser.add_argument("--model_def", type=str, default="config/yolov3-custom.cfg", help="path to model definition file")
-    parser.add_argument("--data_config", type=str, default="config/thermal.data", help="path to data config file")
+    parser.add_argument("--model_def", type=str, default="config/yolov3-custom1.cfg", help="path to model definition file")
+    parser.add_argument("--data_config", type=str, default="config/rgo.data", help="path to data config file")
     parser.add_argument("--pretrained_weights", type=str, help="if specified starts from checkpoint model")
     parser.add_argument("--n_cpu", type=int, default=8, help="number of cpu threads to use during batch generation")
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
@@ -70,12 +102,14 @@ if __name__ == "__main__":
     parser.add_argument("--evaluation_interval", type=int, default=1, help="interval evaluations on validation set")
     parser.add_argument("--compute_map", default=False, help="if True computes mAP every tenth batch")
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
+    parser.add_argument("--transfer", default=True, help="transfer")
     opt = parser.parse_args()
     print(opt)
 
     logger = Logger("logs")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    available_else_cpu = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(available_else_cpu)
 
     os.makedirs("output", exist_ok=True)
     os.makedirs("checkpoints", exist_ok=True)
@@ -91,11 +125,18 @@ if __name__ == "__main__":
     model.apply(weights_init_normal)
 
     # If specified we start from checkpoint
-    if opt.pretrained_weights:
+    if opt.transfer and opt.pretrained_weights.endswith(".pth"):
+        print("Do transfer learning")
+        load_model_custom(opt.weights_path)
+        do_transfer()
+
+    elif opt.pretrained_weights:
         if opt.pretrained_weights.endswith(".pth"):
-            model.load_state_dict(torch.load(opt.pretrained_weights))
+            load = torch.load(opt.pretrained_weights, map_location=available_else_cpu)
+            model.load_state_dict(load)
         else:
             model.load_darknet_weights(opt.pretrained_weights)
+
 
     # Get dataloader
     dataset = ListDataset(train_path, augment=True, multiscale=opt.multiscale_training)

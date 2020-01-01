@@ -4,7 +4,6 @@ from models import *
 from utils.utils import *
 from utils.datasets import *
 
-import shutil
 import os
 import sys
 import time
@@ -23,27 +22,7 @@ import matplotlib.patches as patches
 from matplotlib.ticker import NullLocator
 
 
-def create_sorted_img_array(file_path):
-    l = os.listdir(file_path)
-    l = list(map(lambda x: os.path.join(file_path, x), l))
-    l.sort()
-    img_array = []
-    for filename in tqdm.tqdm(l):
-        img = cv2.imread(filename)
-        height, width, layers = img.shape
-        size = (width,height)
-        img_array.append(img)
 
-    return img_array, size
-
-
-def create_video_from_images(file_path, output):
-    img_array, size = create_sorted_img_array(file_path)
-    out = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*'DIVX'), 5, size)
-
-    for i in range(len(img_array)):
-        out.write(img_array[i])
-    out.release()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -57,7 +36,6 @@ if __name__ == "__main__":
     parser.add_argument("--n_cpu", type=int, default=0, help="number of cpu threads to use during batch generation")
     parser.add_argument("--img_size", type=int, default=416, help="size of each image dimension")
     parser.add_argument("--output", type=str, default="output")
-    parser.add_argument("--video", default=True)
     opt = parser.parse_args()
 
     print(opt)
@@ -65,11 +43,7 @@ if __name__ == "__main__":
     available_else_cpu = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(available_else_cpu)
 
-    if opt.video:
-        opt.output = "tmp"
-        os.makedirs(opt.output, exist_ok=False)
-    else:
-        os.makedirs(opt.output, exist_ok=True)
+    os.makedirs(opt.output, exist_ok=True)
 
     # Set up model
     model = Darknet(opt.model_def, img_size=opt.img_size).to(device)
@@ -150,12 +124,31 @@ if __name__ == "__main__":
 
                 #print("\t+ Label: %s, Conf: %.5f" % (classes[int(cls_pred)], cls_conf.item()))
                 print("\t+ Label: %s, cls Conf: %.5f conf: %.5f" % (classes[int(cls_pred)], cls_conf.item(), conf.item()))
+        #        if y2>h:
+        #            y2 = h-1
+        #        if x2>w:
+        #            x2 = w-1
 
                 box_w = x2 - x1
                 box_h = y2 - y1
 
                 #color = colors[int(cls_pred)]
                 color = colors[0]
+                # Create a Rectangle patch
+                if x1.item() > w:
+                    print(f"error! x {x1.item()} w {w} path {path}")
+
+                if y1.item() > h:
+                    print(f"error! y {y1.item()} h { h}, path {path}")
+
+                if x1 + box_w > w:
+                    print(f"fix! x {x1.item(),  box_w.item() ,w}  path {path} ")
+                    #box_w = w - x1
+
+                if y1 + box_h > h:
+                    print(f"fix! y {y1.item(),  box_h.item() ,h}  path {path} x1x2y1y2 {x1} {x2}   {y1} {y2} hw {h} {w} ")
+                    #box_h = h - y1
+
                 bbox = patches.Rectangle((x1, y1), box_w, box_h, linewidth=2, edgecolor=color, facecolor="none")
 
                 # Add the bbox to the plot
@@ -164,7 +157,7 @@ if __name__ == "__main__":
                 plt.text(
                     x1,
                     y1,
-                    s=f"{classes[int(cls_pred)]} {format(conf.item(), '.2f')}",
+                    s=format(conf.item(), '.2f'),
                     color="white",
                     verticalalignment="top",
                     bbox={"color": color, "pad": 0},
@@ -177,8 +170,3 @@ if __name__ == "__main__":
         filename = path.split("/")[-1].split(".")[0]
         plt.savefig(f"{opt.output}/{filename}.png", bbox_inches="tight", pad_inches=0.0)
         plt.close()
-
-    if opt.video:
-        create_video_from_images(opt.output, "/tmp/video.avi")
-        shutil.rmtree(opt.output)
-
